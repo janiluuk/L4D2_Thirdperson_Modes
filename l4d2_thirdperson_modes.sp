@@ -3,7 +3,8 @@
 #include <clientprefs>
 
 Handle g_hCookie;
-int	g_iClientModePref[MAXPLAYERS+1];
+int	g_iClientModePref[MAXPLAYERS+1] = {0,...};
+ConVar pluginEnabled;
 
 new bool:Third_Melee[MAXPLAYERS+1] = {false, ...};
 new bool:Third_Melee_Always[MAXPLAYERS+1] = {false, ...};
@@ -19,10 +20,22 @@ public Plugin:myinfo =
 
 public OnPluginStart()
 {
+	pluginEnabled = CreateConVar("l4d_thirdperson_allow","1","0=Plugin off, 1=Plugin on.", FCVAR_NOTIFY );
 	RegConsoleCmd("sm_tp", sm_tp);
 	RegConsoleCmd("sm_tps", sm_tp_select);
-	g_hCookie = RegClientCookie("l4d_thirdperson_preference", "Third person - Mode", CookieAccess_Protected);
+	g_hCookie = RegClientCookie("l4d_tp_preference", "Third person - Mode", CookieAccess_Protected);
+	pluginEnabled.AddChangeHook(ConVarChanged_Allow);
+	isAllowed();
+}
 
+public void OnConfigsExecuted()
+{
+	isAllowed();
+}
+
+void ConVarChanged_Allow(Handle convar, const char[] oldValue, const char[] newValue)
+{
+	isAllowed();
 }
 
 public Action:sm_tp_select(client,args)
@@ -54,6 +67,17 @@ public Action:sm_tp_select(client,args)
 	return Plugin_Handled;
 }
 
+public void OnClientPutInServer(int client)
+{
+	isAllowed();
+
+	if (client > 0 && !IsFakeClient(client) && IsClientInGame(client)) {
+
+		if (g_iClientModePref[client] == 0) disableTP(client);
+		if (g_iClientModePref[client] == 1) enableTPMeleeOnly(client);
+		if (g_iClientModePref[client] == 2) enableTP(client);
+	}
+}
 public Action:sm_tp(client,args)
 {
 	if(client > 0 && IsClientInGame(client))
@@ -66,9 +90,10 @@ public Action:sm_tp(client,args)
 void SetClientPrefs(int client)
 {
 	if( !IsFakeClient(client) )
-	{	
-		static char sCookie[2];
-		Format(sCookie, sizeof(sCookie), "%i", g_iClientModePref[client]);
+	{
+		static char sCookie[3];
+		Format(sCookie, sizeof(sCookie), "%s", g_iClientModePref[client]);
+		//PrintToChat(client,"Setting cookie %i to %d", g_iClientModePref[client], sCookie);
 		SetClientCookie(client, g_hCookie, sCookie);
 	}
 }
@@ -78,12 +103,17 @@ public void OnClientCookiesCached(int client)
 	if( client > 0 && IsClientInGame(client) && !IsFakeClient(client))
 	{
 		// Get client cookies, set type if available or default.
+		int iCookie;
 		static char sCookie[3];
-		GetClientCookie(client, g_hCookie, sCookie, sizeof(sCookie));
+		//PrintToChat(client, "Looking for cookie.. ");
 
-		if(StringToInt(sCookie) == 1 || StringToInt(sCookie) == 2)
+		GetClientCookie(client, g_hCookie, sCookie, sizeof(sCookie));
+		iCookie = StringToInt(sCookie);
+		//PrintToChat(client, "Found cookie value %d", sCookie);
+	
+		if (iCookie == 1 || iCookie == 2)
 		{
-			g_iClientModePref[client] = StringToInt(sCookie);
+			g_iClientModePref[client] = iCookie;
 
 		} else {
 			g_iClientModePref[client] = 0;
@@ -125,7 +155,6 @@ public MenuSelector1(Handle:menu, MenuAction:action, client, param2)
 		{
 			enableTP(client);
 		}
-		SetClientPrefs(client);
 
 	}
 }
@@ -156,41 +185,50 @@ void enableTP(client) {
 	SetEntPropFloat(client, Prop_Send, "m_TimeForceExternalView", 99999.3);
 }
 
+void isAllowed() {
+
+	if (GetConVarBool(pluginEnabled) == true)  {
+		for( int i = 1; i <= MaxClients; i++ )
+		{
+			if( IsClientInGame(i) )
+			{
+				OnClientCookiesCached(i);
+				OnClientPutInServer(i);
+			}
+		}	
+	}
+}
 public void OnMapStart() {
 
-	for (int client = 1; client <= MaxClients; client++) {
-		OnClientCookiesCached(client);
-		if (GetClientTeam(client) == 2 && IsPlayerAlive(client)) {
-			if (g_iClientModePref[client] == 1) enableTPMeleeOnly(client);
-			if (g_iClientModePref[client] == 2) enableTP(client);
-		}
-	}
+	isAllowed();
+
 }
 
 public OnGameFrame()
 {
+	new String:sClassName[64];
+	new WeaponSlot;
+	new ActiveWeapon;
+
 	for(new client=1; client<=MaxClients; client++)
 	{
 
-		if (IsClientInGame(client) && GetClientTeam(client) == 2 && IsPlayerAlive(client) && !IsFakeClient(client))
+		if (IsClientInGame(client) && (g_iClientModePref[client] > 0 || Third_Melee[client] == true) && IsPlayerAlive(client) && !IsFakeClient(client) )
 		{
-			if(Third_Melee[client] == true)
+			WeaponSlot = GetPlayerWeaponSlot(client, 1);
+			if (WeaponSlot == -1) { return; }
+			ActiveWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+			GetEdictClassname(WeaponSlot, sClassName, sizeof(sClassName));
+	
+			if(Third_Melee_Always[client] == true || (StrEqual(sClassName, "weapon_melee") && WeaponSlot == ActiveWeapon))
 			{
-				new String:sClassName[64];
-				new WeaponSlot = GetPlayerWeaponSlot(client, 1);
-				if (WeaponSlot == -1) { return; }
-				new ActiveWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-				GetEdictClassname(WeaponSlot, sClassName, sizeof(sClassName));
-		
-				if(Third_Melee_Always[client] == true || (StrEqual(sClassName, "weapon_melee") && WeaponSlot == ActiveWeapon))
-				{
-					SetEntPropFloat(client, Prop_Send, "m_TimeForceExternalView", 99999.3);
-				}
-				else
-				{
-					SetEntPropFloat(client, Prop_Send, "m_TimeForceExternalView", 0.0);
-				}
+				SetEntPropFloat(client, Prop_Send, "m_TimeForceExternalView", 99999.3);
 			}
+			else
+			{
+				SetEntPropFloat(client, Prop_Send, "m_TimeForceExternalView", 0.0);
+			}
+	
 		}
 	}
 }
